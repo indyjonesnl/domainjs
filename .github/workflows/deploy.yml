@@ -1,0 +1,26 @@
+name: Vue app deployment
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+      - run: npm ci
+      - run: npm run build
+      - name: Commit build to gh-pages
+        run: |
+          git config --global user.email "github-actions[bot]@users.noreply.github.com";
+          git config --global user.name "github-actions[bot]";
+          git --work-tree dist add --all 
+          git commit -m "Deployment ${{ github.run_number }}"
+          git push origin HEAD:gh-pages
+        shell: bash
