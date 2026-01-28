@@ -93,33 +93,54 @@ function removeToast(id) {
 
 // Add a new domain to the unresolved list
 function addDomain() {
-  const domain = newDomain.value.trim()
+  const input = newDomain.value.trim()
 
-  if (!domain) {
+  if (!input) {
     return
   }
 
-  // Check if domain already exists in unresolved list
-  if (unresolvedDomains.value.includes(domain)) {
-    showWarning(`Domain "${domain}" is already in the unresolved list!`)
+  // Split by comma and trim each domain
+  const domains = input.split(',').map(d => d.trim()).filter(d => d !== '')
+
+  if (domains.length === 0) {
     return
   }
 
-  // Check if domain already exists in resolved list
-  const alreadyResolved = resolvedDomains.value.some(resolved => resolved.domain === domain)
-  if (alreadyResolved) {
-    showWarning(`Domain "${domain}" has already been resolved!`)
-    return
+  const addedDomains = []
+  const warnings = []
+
+  for (const domain of domains) {
+    // Check if domain already exists in unresolved list
+    if (unresolvedDomains.value.includes(domain)) {
+      warnings.push(`"${domain}" is already in the unresolved list`)
+      continue
+    }
+
+    // Check if domain already exists in resolved list
+    const alreadyResolved = resolvedDomains.value.some(resolved => resolved.domain === domain)
+    if (alreadyResolved) {
+      warnings.push(`"${domain}" has already been resolved`)
+      continue
+    }
+
+    // Add domain
+    unresolvedDomains.value.push(domain)
+    addedDomains.push(domain)
   }
 
-  // Add domain
-  unresolvedDomains.value.push(domain)
+  // Sort alphabetically if any domains were added
+  if (addedDomains.length > 0) {
+    unresolvedDomains.value.sort((a, b) => a.localeCompare(b))
+    saveToStorage()
+  }
 
-  // Sort alphabetically
-  unresolvedDomains.value.sort((a, b) => a.localeCompare(b))
-
+  // Clear input
   newDomain.value = ''
-  saveToStorage()
+
+  // Show warnings if any
+  if (warnings.length > 0) {
+    showWarning(warnings.join(', '))
+  }
 }
 
 // Add a new known server
@@ -273,6 +294,12 @@ function removeResolvedDomain(index) {
   saveToStorage()
 }
 
+// Remove all unmatched domains
+function removeAllUnmatched() {
+  resolvedDomains.value = resolvedDomains.value.filter(resolved => resolved.serverName !== null)
+  saveToStorage()
+}
+
 // Grouped domains by server
 const groupedDomains = computed(() => {
   const groups = {
@@ -402,44 +429,57 @@ function loadFromStorage() {
       </div>
     </div>
 
-    <!-- Known Servers List -->
-    <div class="servers-list" v-if="knownServers.length > 0">
-      <h3>Known Servers</h3>
-      <div class="server-items">
-        <div v-for="(server, index) in knownServers" :key="index" class="server-item">
-          <span><strong>{{ server.name }}</strong>: {{ server.ip }}</span>
-          <button class="remove-btn" @click="removeServer(index)">Remove</button>
-        </div>
-      </div>
-    </div>
-
-    <!-- Two Column Layout -->
-    <div class="columns">
-      <!-- Left Column: Unresolved Domains -->
-      <div class="column">
-        <h2>Unresolved Domains ({{ unresolvedDomains.length }})</h2>
-        <div class="domain-list">
-          <div v-if="unresolvedDomains.length === 0" class="empty-state">
-            No unresolved domains
+    <!-- Top Section: Known Servers (Left) + Unresolved/Unmatched (Right) -->
+    <div class="top-section">
+      <!-- Left: Known Servers -->
+      <div class="section known-servers-section">
+        <h2>Known Servers ({{ knownServers.length }})</h2>
+        <div class="server-items">
+          <div v-if="knownServers.length === 0" class="empty-state">
+            No known servers
           </div>
-          <div
-            v-for="domain in unresolvedDomains"
-            :key="domain"
-            class="domain-item"
-          >
-            <span class="domain-name">{{ domain }}</span>
-            <button class="remove-btn" @click="removeDomain(domain)">Remove</button>
+          <div v-for="(server, index) in knownServers" :key="index" class="server-item">
+            <span><strong>{{ server.name }}</strong>: {{ server.ip }}</span>
+            <button class="remove-btn" @click="removeServer(index)">Remove</button>
           </div>
         </div>
       </div>
 
-      <!-- Right Column: Resolved Domains -->
-      <div class="column">
-        <h2>Resolved Domains</h2>
+      <!-- Right: Unresolved + Unmatched -->
+      <div class="right-column">
+        <!-- Unresolved Domains -->
+        <div class="section">
+          <h2>Unresolved Domains ({{ unresolvedDomains.length }})</h2>
+          <div class="domain-list">
+            <div v-if="unresolvedDomains.length === 0" class="empty-state">
+              No unresolved domains
+            </div>
+            <div
+              v-for="domain in unresolvedDomains"
+              :key="domain"
+              class="domain-item"
+            >
+              <span class="domain-name">{{ domain }}</span>
+              <button class="remove-btn" @click="removeDomain(domain)">Remove</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Visual Divider -->
+        <div class="column-divider"></div>
 
         <!-- Unmatched Domains -->
-        <div class="server-group">
-          <h3 class="unmatched-header">Unmatched ({{ groupedDomains.unmatched.length }})</h3>
+        <div class="section">
+          <div class="section-header">
+            <h2 class="unmatched-header">Unmatched ({{ groupedDomains.unmatched.length }})</h2>
+            <button
+              class="delete-all-btn"
+              @click="removeAllUnmatched"
+              :disabled="groupedDomains.unmatched.length === 0"
+            >
+              Delete All
+            </button>
+          </div>
           <div class="resolved-list">
             <div v-if="groupedDomains.unmatched.length === 0" class="empty-state">
               No unmatched domains
@@ -461,17 +501,23 @@ function loadFromStorage() {
             </div>
           </div>
         </div>
+      </div>
+    </div>
 
-        <!-- Matched Domains by Server -->
+    <!-- Bottom Section: Matched Domains by Server (Full Width Horizontal Grid) -->
+    <div class="bottom-section">
+      <h2 class="servers-title">Matched Domains by Server</h2>
+      <div class="servers-grid">
         <div
           v-for="server in knownServers"
           :key="server.name"
-          class="server-group"
+          class="server-column"
         >
-          <h3>{{ server.name }} ({{ server.ip }}) - {{ groupedDomains[server.name]?.length || 0 }} domains</h3>
+          <h3>{{ server.name }} ({{ server.ip }})</h3>
+          <div class="server-count">{{ groupedDomains[server.name]?.length || 0 }} domains</div>
           <div class="resolved-list">
             <div v-if="!groupedDomains[server.name] || groupedDomains[server.name].length === 0" class="empty-state">
-              No domains resolved to this server
+              No domains
             </div>
             <div
               v-for="(resolved, index) in groupedDomains[server.name]"
@@ -497,7 +543,7 @@ function loadFromStorage() {
 
 <style scoped>
 .app {
-  max-width: 1400px;
+  max-width: 2400px;
   margin: 0 auto;
   padding: 20px;
 }
@@ -684,19 +730,6 @@ button:disabled {
   border-color: #ccc;
 }
 
-.servers-list {
-  background: #fff;
-  padding: 20px;
-  border-radius: 8px;
-  border: 1px solid #e0e0e0;
-  margin-bottom: 30px;
-}
-
-.servers-list h3 {
-  margin-top: 0;
-  color: #333;
-}
-
 .server-items {
   display: flex;
   flex-direction: column;
@@ -713,24 +746,132 @@ button:disabled {
   border: 1px solid #e0e0e0;
 }
 
-.columns {
-  display: grid;
-  grid-template-columns: 1fr 2fr;
+.top-section {
+  display: flex;
   gap: 20px;
+  align-items: flex-start;
+  margin-bottom: 30px;
 }
 
-.column {
+.known-servers-section {
+  flex: 0 0 700px;
+}
+
+.right-column {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  min-width: 0;
+}
+
+.section {
   background: white;
   padding: 20px;
   border-radius: 8px;
   border: 1px solid #e0e0e0;
 }
 
-.column h2 {
+.section h2 {
   margin-top: 0;
   color: #333;
   border-bottom: 2px solid #42b883;
   padding-bottom: 10px;
+}
+
+.section-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  padding-bottom: 10px;
+  border-bottom: 2px solid #e67e22;
+  margin-bottom: 15px;
+}
+
+.section-header h2 {
+  margin-bottom: 0;
+  padding-bottom: 0;
+  border-bottom: none;
+  flex: 1;
+}
+
+.delete-all-btn {
+  padding: 8px 16px;
+  font-size: 13px;
+  background: #e74c3c;
+  white-space: nowrap;
+}
+
+.delete-all-btn:hover:not(:disabled) {
+  background: #c0392b;
+}
+
+.delete-all-btn:disabled {
+  background: #ccc;
+  cursor: not-allowed;
+}
+
+.column-divider {
+  height: 30px;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.column-divider::before {
+  content: '';
+  position: absolute;
+  left: 20px;
+  right: 20px;
+  height: 2px;
+  background: linear-gradient(to right, transparent, #ddd, transparent);
+}
+
+.bottom-section {
+  width: 100%;
+}
+
+.servers-title {
+  margin-top: 0;
+  margin-bottom: 20px;
+  color: #333;
+  font-size: 24px;
+  text-align: center;
+}
+
+.servers-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 20px;
+  align-items: start;
+}
+
+.server-column {
+  background: white;
+  padding: 20px;
+  border-radius: 8px;
+  border: 1px solid #e0e0e0;
+  display: flex;
+  flex-direction: column;
+  min-height: 200px;
+}
+
+.server-column h3 {
+  margin-top: 0;
+  margin-bottom: 5px;
+  color: #333;
+  font-size: 16px;
+  border-bottom: 2px solid #42b883;
+  padding-bottom: 8px;
+}
+
+.server-count {
+  font-size: 12px;
+  color: #666;
+  margin-bottom: 15px;
+  font-weight: 500;
 }
 
 .domain-list {
@@ -754,23 +895,9 @@ button:disabled {
   color: #333;
 }
 
-.server-group {
-  margin-bottom: 30px;
-}
-
-.server-group:last-child {
-  margin-bottom: 0;
-}
-
-.server-group h3 {
-  color: #333;
-  margin-bottom: 15px;
-  padding-bottom: 8px;
-  border-bottom: 1px solid #e0e0e0;
-}
-
 .unmatched-header {
   color: #e67e22 !important;
+  border-bottom-color: #e67e22 !important;
 }
 
 .resolved-list {
@@ -852,17 +979,37 @@ button:disabled {
   font-style: italic;
 }
 
-@media (max-width: 768px) {
-  .columns {
-    grid-template-columns: 1fr;
+@media (max-width: 1200px) {
+  .top-section {
+    flex-direction: column;
   }
 
+  .known-servers-section {
+    flex: 1;
+    width: 100%;
+  }
+
+  .right-column {
+    flex: 1;
+    width: 100%;
+  }
+
+  .servers-grid {
+    grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  }
+}
+
+@media (max-width: 768px) {
   .input-row {
     flex-direction: column;
   }
 
   .button-row {
     flex-direction: column;
+  }
+
+  .servers-grid {
+    grid-template-columns: 1fr;
   }
 }
 </style>
