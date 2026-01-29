@@ -352,6 +352,52 @@ function loadFromStorage() {
   knownServers.value = []
   resolvedDomains.value = []
 
+  // Migration: Check for old localStorage format (everything in single keys)
+  const oldUnresolvedData = localStorage.getItem('unresolvedDomains')
+  const oldKnownServersData = localStorage.getItem('knownServers')
+  const oldResolvedDomainsData = localStorage.getItem('resolvedDomains')
+
+  if (oldUnresolvedData || oldKnownServersData || oldResolvedDomainsData) {
+    // Migrate from old format
+    if (oldUnresolvedData) {
+      try {
+        const oldUnresolved = JSON.parse(oldUnresolvedData)
+        if (Array.isArray(oldUnresolved)) {
+          unresolvedDomains.value = oldUnresolved
+        }
+      } catch (e) {
+        console.error('Failed to parse old unresolvedDomains:', e)
+      }
+    }
+
+    if (oldKnownServersData) {
+      try {
+        const oldServers = JSON.parse(oldKnownServersData)
+        if (Array.isArray(oldServers)) {
+          knownServers.value = oldServers
+        }
+      } catch (e) {
+        console.error('Failed to parse old knownServers:', e)
+      }
+    }
+
+    if (oldResolvedDomainsData) {
+      try {
+        const oldResolved = JSON.parse(oldResolvedDomainsData)
+        if (Array.isArray(oldResolved)) {
+          resolvedDomains.value = oldResolved
+        }
+      } catch (e) {
+        console.error('Failed to parse old resolvedDomains:', e)
+      }
+    }
+
+    // Save to new format and remove old keys
+    saveToStorage()
+    return
+  }
+
+  // Load from new format (individual keys)
   // Iterate through all localStorage keys
   for (let i = 0; i < localStorage.length; i++) {
     const key = localStorage.key(i)
