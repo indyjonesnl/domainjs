@@ -10,10 +10,8 @@ const newServerName = ref('')
 const newServerIP = ref('')
 const isResolving = ref(false)
 const isRetryingAll = ref(false)
-const warningMessage = ref('')
-const warningTimeout = ref(null)
-const toasts = ref([])
-let toastIdCounter = 0
+const consoleLogs = ref([])
+let logIdCounter = 0
 const recentlyRetriedDomains = ref(new Set())
 
 // Load data from localStorage on mount
@@ -54,41 +52,17 @@ async function resolveDomain(domain) {
   }
 }
 
-// Show warning message
-function showWarning(message) {
-  warningMessage.value = message
-
-  // Clear existing timeout
-  if (warningTimeout.value) {
-    clearTimeout(warningTimeout.value)
-  }
-
-  // Auto-dismiss after 4 seconds
-  warningTimeout.value = setTimeout(() => {
-    warningMessage.value = ''
-  }, 4000)
-}
-
-// Show toast notification
-function showToast(message, type = 'warning') {
-  const id = toastIdCounter++
-  const toast = {
+// Add log message to console
+function addLog(message, type = 'info') {
+  const id = logIdCounter++
+  const log = {
     id,
     message,
-    type
+    type,
+    timestamp: new Date().toLocaleString()
   }
 
-  toasts.value.push(toast)
-
-  // Auto-dismiss after 6 seconds
-  setTimeout(() => {
-    removeToast(id)
-  }, 6000)
-}
-
-// Remove toast by ID
-function removeToast(id) {
-  toasts.value = toasts.value.filter(toast => toast.id !== id)
+  consoleLogs.value.push(log)
 }
 
 // Add a new domain to the unresolved list
@@ -139,7 +113,7 @@ function addDomain() {
 
   // Show warnings if any
   if (warnings.length > 0) {
-    showWarning(warnings.join(', '))
+    addLog(warnings.join(', '), 'warning')
   }
 }
 
@@ -239,7 +213,7 @@ async function retryResolveDomain(domain) {
         return server ? server.name : 'Unmatched'
       }).join(', ')
 
-      showToast(
+      addLog(
         `⚠️ IP Address Changed! "${domain}" resolved from ${oldServerNames} (${oldIPs.join(', ')}) to ${newServerNames} (${ips.join(', ')})`,
         'warning'
       )
@@ -326,34 +300,102 @@ const groupedDomains = computed(() => {
   return groups
 })
 
-// Save to localStorage
+// Save to localStorage using individual keys
 function saveToStorage() {
-  localStorage.setItem('unresolvedDomains', JSON.stringify(unresolvedDomains.value))
-  localStorage.setItem('knownServers', JSON.stringify(knownServers.value))
-  localStorage.setItem('resolvedDomains', JSON.stringify(resolvedDomains.value))
+  // Clear old data structure (migration)
+  localStorage.removeItem('unresolvedDomains')
+  localStorage.removeItem('knownServers')
+  localStorage.removeItem('resolvedDomains')
+
+  // Clear existing domain and server keys
+  const keysToRemove = []
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i)
+    if (key && (key.startsWith('domain:') || key.startsWith('server:'))) {
+      keysToRemove.push(key)
+    }
+  }
+  keysToRemove.forEach(key => localStorage.removeItem(key))
+
+  // Save unresolved domains individually
+  unresolvedDomains.value.forEach(domain => {
+    localStorage.setItem(`domain:unresolved:${domain}`, 'true')
+  })
+
+  // Save resolved domains individually (group by domain name)
+  const resolvedByDomain = {}
+  resolvedDomains.value.forEach(resolved => {
+    if (!resolvedByDomain[resolved.domain]) {
+      resolvedByDomain[resolved.domain] = []
+    }
+    resolvedByDomain[resolved.domain].push({
+      ip: resolved.ip,
+      serverName: resolved.serverName,
+      resolvedAt: resolved.resolvedAt,
+      timestamp: resolved.timestamp
+    })
+  })
+
+  Object.entries(resolvedByDomain).forEach(([domain, records]) => {
+    localStorage.setItem(`domain:resolved:${domain}`, JSON.stringify(records))
+  })
+
+  // Save known servers individually
+  knownServers.value.forEach(server => {
+    localStorage.setItem(`server:${server.name}`, JSON.stringify({ ip: server.ip }))
+  })
 }
 
-// Load from localStorage
+// Load from localStorage using individual keys
 function loadFromStorage() {
-  const savedUnresolved = localStorage.getItem('unresolvedDomains')
-  const savedServers = localStorage.getItem('knownServers')
-  const savedResolved = localStorage.getItem('resolvedDomains')
+  unresolvedDomains.value = []
+  knownServers.value = []
+  resolvedDomains.value = []
 
-  if (savedUnresolved) {
-    unresolvedDomains.value = JSON.parse(savedUnresolved)
-    // Sort alphabetically
-    unresolvedDomains.value.sort((a, b) => a.localeCompare(b))
+  // Iterate through all localStorage keys
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i)
+    if (!key) continue
+
+    // Load unresolved domains
+    if (key.startsWith('domain:unresolved:')) {
+      const domain = key.replace('domain:unresolved:', '')
+      unresolvedDomains.value.push(domain)
+    }
+
+    // Load resolved domains
+    if (key.startsWith('domain:resolved:')) {
+      const domain = key.replace('domain:resolved:', '')
+      const records = JSON.parse(localStorage.getItem(key) || '[]')
+
+      records.forEach(record => {
+        resolvedDomains.value.push({
+          domain,
+          ip: record.ip,
+          serverName: record.serverName,
+          resolvedAt: record.resolvedAt,
+          timestamp: record.timestamp
+        })
+      })
+    }
+
+    // Load known servers
+    if (key.startsWith('server:')) {
+      const serverName = key.replace('server:', '')
+      const serverData = JSON.parse(localStorage.getItem(key) || '{}')
+
+      if (serverData.ip) {
+        knownServers.value.push({
+          name: serverName,
+          ip: serverData.ip
+        })
+      }
+    }
   }
 
-  if (savedServers) {
-    knownServers.value = JSON.parse(savedServers)
-  }
-
-  if (savedResolved) {
-    resolvedDomains.value = JSON.parse(savedResolved)
-    // Sort alphabetically by domain name
-    resolvedDomains.value.sort((a, b) => a.domain.localeCompare(b.domain))
-  }
+  // Sort arrays
+  unresolvedDomains.value.sort((a, b) => a.localeCompare(b))
+  resolvedDomains.value.sort((a, b) => a.domain.localeCompare(b.domain))
 }
 </script>
 
@@ -361,20 +403,22 @@ function loadFromStorage() {
   <div class="app">
     <h1>DNS Domain Resolver</h1>
 
-    <!-- Warning Message -->
-    <div v-if="warningMessage" class="warning-message">
-      ⚠️ {{ warningMessage }}
-    </div>
-
-    <!-- Toast Notifications -->
-    <div class="toast-container">
-      <div
-        v-for="toast in toasts"
-        :key="toast.id"
-        :class="['toast', `toast-${toast.type}`]"
-      >
-        <span class="toast-message">{{ toast.message }}</span>
-        <button class="toast-close" @click="removeToast(toast.id)">×</button>
+    <!-- Console Log -->
+    <div v-if="consoleLogs.length > 0" class="console-container">
+      <div class="console-header">
+        <h3>Console</h3>
+        <span class="console-count">{{ consoleLogs.length }} {{ consoleLogs.length === 1 ? 'message' : 'messages' }}</span>
+      </div>
+      <div class="console-logs">
+        <div
+          v-for="log in consoleLogs"
+          :key="log.id"
+          :class="['console-log', `console-log-${log.type}`]"
+        >
+          <span class="console-timestamp">{{ log.timestamp }}</span>
+          <span :class="['console-type', `console-type-${log.type}`]">{{ log.type.toUpperCase() }}</span>
+          <span class="console-message">{{ log.message }}</span>
+        </div>
       </div>
     </div>
 
@@ -554,96 +598,92 @@ h1 {
   margin-bottom: 30px;
 }
 
-.warning-message {
-  background: #fff3cd;
-  border: 2px solid #ffc107;
-  color: #856404;
-  padding: 15px 20px;
+.console-container {
+  background: #1e1e1e;
+  border: 1px solid #3e3e3e;
   border-radius: 8px;
   margin-bottom: 20px;
-  text-align: center;
-  font-weight: 500;
-  animation: slideDown 0.3s ease-out;
-}
-
-@keyframes slideDown {
-  from {
-    opacity: 0;
-    transform: translateY(-10px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-.toast-container {
-  position: fixed;
-  top: 20px;
-  right: 20px;
-  z-index: 1000;
+  max-height: 400px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  max-width: 500px;
+  overflow: hidden;
 }
 
-.toast {
-  background: white;
-  border-radius: 8px;
-  padding: 16px 20px;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+.console-header {
+  background: #2d2d2d;
+  padding: 10px 15px;
+  border-bottom: 1px solid #3e3e3e;
   display: flex;
-  align-items: flex-start;
-  gap: 12px;
-  animation: slideInRight 0.3s ease-out;
-  border-left: 4px solid #ffc107;
-}
-
-.toast-warning {
-  border-left-color: #ff9800;
-  background: #fff8e1;
-}
-
-.toast-message {
-  flex: 1;
-  color: #333;
-  font-size: 14px;
-  line-height: 1.5;
-  word-break: break-word;
-}
-
-.toast-close {
-  background: none;
-  border: none;
-  color: #999;
-  font-size: 24px;
-  line-height: 1;
-  cursor: pointer;
-  padding: 0;
-  width: 24px;
-  height: 24px;
-  display: flex;
+  justify-content: space-between;
   align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  transition: color 0.2s;
 }
 
-.toast-close:hover {
-  color: #333;
-  background: transparent;
+.console-header h3 {
+  margin: 0;
+  color: #42b883;
+  font-size: 14px;
+  font-weight: 600;
+  text-transform: uppercase;
 }
 
-@keyframes slideInRight {
-  from {
-    opacity: 0;
-    transform: translateX(100px);
-  }
-  to {
-    opacity: 1;
-    transform: translateX(0);
-  }
+.console-count {
+  color: #888;
+  font-size: 12px;
+}
+
+.console-logs {
+  overflow-y: auto;
+  padding: 10px;
+  flex: 1;
+}
+
+.console-log {
+  display: grid;
+  grid-template-columns: auto auto 1fr;
+  gap: 12px;
+  padding: 8px 10px;
+  border-bottom: 1px solid #2d2d2d;
+  font-family: 'Courier New', Courier, monospace;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.console-log:last-child {
+  border-bottom: none;
+}
+
+.console-timestamp {
+  color: #888;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.console-type {
+  font-weight: bold;
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: 3px;
+  white-space: nowrap;
+}
+
+.console-type-info {
+  color: #4fc3f7;
+  background: rgba(79, 195, 247, 0.1);
+}
+
+.console-type-warning {
+  color: #ffb74d;
+  background: rgba(255, 183, 77, 0.1);
+}
+
+.console-type-error {
+  color: #e57373;
+  background: rgba(229, 115, 115, 0.1);
+}
+
+.console-message {
+  color: #e0e0e0;
+  word-break: break-word;
 }
 
 .controls {
