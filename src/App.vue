@@ -225,7 +225,7 @@ async function resolveAllDomains() {
 }
 
 // Retry resolving a single domain
-async function retryResolveDomain(domain) {
+async function retryResolveDomain(domain, skipConsistencyCheck = false) {
   const ips = await resolveDomain(domain)
 
   if (ips && ips.length > 0) {
@@ -277,7 +277,11 @@ async function retryResolveDomain(domain) {
     resolvedDomains.value.sort((a, b) => a.domain.localeCompare(b.domain))
 
     saveToStorage()
-    checkDomainConsistency()
+
+    // Only check consistency if not skipped (when retrying individual domains)
+    if (!skipConsistencyCheck) {
+      checkDomainConsistency()
+    }
   }
 }
 
@@ -294,7 +298,8 @@ async function retryAllResolvedDomains() {
 
   for (let i = 0; i < uniqueDomains.length; i++) {
     const domain = uniqueDomains[i]
-    await retryResolveDomain(domain)
+    // Skip consistency check during batch processing
+    await retryResolveDomain(domain, true)
 
     // Add 100ms delay between retries (except for the last one)
     if (i < uniqueDomains.length - 1) {
@@ -303,6 +308,9 @@ async function retryAllResolvedDomains() {
   }
 
   isRetryingAll.value = false
+
+  // Check consistency once after all retries are complete
+  checkDomainConsistency()
 }
 
 // Remove a domain from unresolved list
