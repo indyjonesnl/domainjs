@@ -53,16 +53,63 @@ async function resolveDomain(domain) {
 }
 
 // Add log message to console
-function addLog(message, type = 'info') {
+function addLog(message, type = 'info', domains = []) {
   const id = logIdCounter++
   const log = {
     id,
     message,
     type,
-    timestamp: new Date().toLocaleString()
+    timestamp: new Date().toLocaleString(),
+    domains // Array of {domain, serverName} objects for clickable links
   }
 
   consoleLogs.value.push(log)
+}
+
+// Extract base domain name (e.g., "thomastrucks" from "thomastrucks.com")
+function extractBaseName(domain) {
+  const parts = domain.split('.')
+  if (parts.length >= 2) {
+    // Return the second-to-last part (the domain name before TLD)
+    return parts[parts.length - 2]
+  }
+  return domain
+}
+
+// Check if domains with same base name are in the same column
+function checkDomainConsistency() {
+  // Group resolved domains by base name
+  const domainsByBaseName = {}
+
+  resolvedDomains.value.forEach(resolved => {
+    const baseName = extractBaseName(resolved.domain)
+    if (!domainsByBaseName[baseName]) {
+      domainsByBaseName[baseName] = []
+    }
+    domainsByBaseName[baseName].push(resolved)
+  })
+
+  // Check each group for consistency
+  for (const [baseName, domains] of Object.entries(domainsByBaseName)) {
+    if (domains.length > 1) {
+      // Get unique server names
+      const serverNames = new Set(domains.map(d => d.serverName))
+
+      if (serverNames.size > 1) {
+        // Domains with same base name are pointing to different servers
+        const domainData = domains.map(d => ({
+          domain: d.domain,
+          serverName: d.serverName || 'unmatched'
+        }))
+
+        addLog(
+          'Domains with same name but different TLDs are not pointing to the same server:',
+          'warning',
+          domainData
+        )
+      }
+    }
+  }
 }
 
 // Add a new domain to the unresolved list
@@ -174,6 +221,7 @@ async function resolveAllDomains() {
   }
 
   isResolving.value = false
+  checkDomainConsistency()
 }
 
 // Retry resolving a single domain
@@ -229,6 +277,7 @@ async function retryResolveDomain(domain) {
     resolvedDomains.value.sort((a, b) => a.domain.localeCompare(b.domain))
 
     saveToStorage()
+    checkDomainConsistency()
   }
 }
 
@@ -266,12 +315,167 @@ function removeDomain(domain) {
 function removeResolvedDomain(index) {
   resolvedDomains.value.splice(index, 1)
   saveToStorage()
+  checkDomainConsistency()
 }
 
 // Remove all unmatched domains
 function removeAllUnmatched() {
   resolvedDomains.value = resolvedDomains.value.filter(resolved => resolved.serverName !== null)
   saveToStorage()
+  checkDomainConsistency()
+}
+
+// Export domains and servers to JSON file
+function exportDomains() {
+  // Get unique domain names
+  const uniqueDomains = [...new Set(resolvedDomains.value.map(rd => rd.domain))]
+
+  // Get servers with name and ip
+  const servers = knownServers.value.map(server => ({
+    name: server.name,
+    ip: server.ip
+  }))
+
+  // Create export object
+  const exportData = {
+    servers: servers,
+    domains: uniqueDomains
+  }
+
+  // Create JSON content
+  const jsonContent = JSON.stringify(exportData, null, 2)
+
+  // Create blob and download
+  const blob = new Blob([jsonContent], { type: 'application/json' })
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = 'domains.json'
+  document.body.appendChild(link)
+  link.click()
+  document.body.removeChild(link)
+  URL.revokeObjectURL(url)
+
+  addLog(`Exported ${servers.length} servers and ${uniqueDomains.length} domains to domains.json`, 'info')
+}
+
+// Import domains and servers from JSON file
+function importDomains() {
+  const input = document.createElement('input')
+  input.type = 'file'
+  input.accept = 'application/json,.json'
+
+  input.onchange = async (e) => {
+    const file = e.target.files[0]
+    if (!file) return
+
+    try {
+      const text = await file.text()
+      const data = JSON.parse(text)
+
+      let servers = []
+      let domains = []
+
+      // Support both old format (array) and new format (object with servers and domains)
+      if (Array.isArray(data)) {
+        // Old format: just domains
+        domains = data
+      } else if (typeof data === 'object' && data !== null) {
+        // New format: object with servers and domains
+        servers = Array.isArray(data.servers) ? data.servers : []
+        domains = Array.isArray(data.domains) ? data.domains : []
+      } else {
+        addLog('Invalid JSON format: Expected an array or an object with servers and domains', 'error')
+        return
+      }
+
+      const addedServers = []
+      const addedDomains = []
+      const warnings = []
+
+      // Import servers
+      for (const server of servers) {
+        if (typeof server !== 'object' || !server.name || !server.ip) {
+          warnings.push(`Skipped invalid server: ${JSON.stringify(server)}`)
+          continue
+        }
+
+        const trimmedName = server.name.trim()
+        const trimmedIp = server.ip.trim()
+
+        if (!trimmedName || !trimmedIp) continue
+
+        // Check if server already exists by name or IP
+        const existsByName = knownServers.value.some(s => s.name === trimmedName)
+        const existsByIp = knownServers.value.some(s => s.ip === trimmedIp)
+
+        if (existsByName || existsByIp) {
+          warnings.push(`Server "${trimmedName}" (${trimmedIp}) already exists`)
+          continue
+        }
+
+        // Add server
+        knownServers.value.push({
+          name: trimmedName,
+          ip: trimmedIp
+        })
+        addedServers.push(trimmedName)
+      }
+
+      // Import domains
+      for (const domain of domains) {
+        // Skip non-string values
+        if (typeof domain !== 'string') {
+          warnings.push(`Skipped non-string value: ${domain}`)
+          continue
+        }
+
+        const trimmedDomain = domain.trim()
+        if (!trimmedDomain) continue
+
+        // Check if domain already exists in unresolved list
+        if (unresolvedDomains.value.includes(trimmedDomain)) {
+          warnings.push(`"${trimmedDomain}" is already in the unresolved list`)
+          continue
+        }
+
+        // Check if domain already exists in resolved list
+        const alreadyResolved = resolvedDomains.value.some(resolved => resolved.domain === trimmedDomain)
+        if (alreadyResolved) {
+          warnings.push(`"${trimmedDomain}" has already been resolved`)
+          continue
+        }
+
+        // Add domain
+        unresolvedDomains.value.push(trimmedDomain)
+        addedDomains.push(trimmedDomain)
+      }
+
+      // Sort alphabetically if any domains were added
+      if (addedDomains.length > 0) {
+        unresolvedDomains.value.sort((a, b) => a.localeCompare(b))
+      }
+
+      // Save if anything was added
+      if (addedServers.length > 0 || addedDomains.length > 0) {
+        saveToStorage()
+        addLog(`Imported ${addedServers.length} servers and ${addedDomains.length} domains from ${file.name}`, 'info')
+      }
+
+      // Show warnings if any
+      if (warnings.length > 0) {
+        addLog(warnings.join(', '), 'warning')
+      }
+
+      if (addedServers.length === 0 && addedDomains.length === 0 && warnings.length === 0) {
+        addLog('No servers or domains found in the file', 'warning')
+      }
+    } catch (error) {
+      addLog(`Failed to import: ${error.message}`, 'error')
+    }
+  }
+
+  input.click()
 }
 
 // Grouped domains by server
@@ -463,7 +667,21 @@ function loadFromStorage() {
         >
           <span class="console-timestamp">{{ log.timestamp }}</span>
           <span :class="['console-type', `console-type-${log.type}`]">{{ log.type.toUpperCase() }}</span>
-          <span class="console-message">{{ log.message }}</span>
+          <span class="console-message">
+            {{ log.message }}
+            <span v-if="log.domains && log.domains.length > 0" class="domain-links">
+              <a
+                v-for="(domainInfo, index) in log.domains"
+                :key="index"
+                :href="`http://${domainInfo.domain}`"
+                target="_blank"
+                rel="noopener noreferrer"
+                class="domain-link"
+              >
+                {{ domainInfo.domain }} ({{ domainInfo.serverName }})<span v-if="index < log.domains.length - 1">, </span>
+              </a>
+            </span>
+          </span>
         </div>
       </div>
     </div>
@@ -514,6 +732,19 @@ function loadFromStorage() {
             :disabled="resolvedDomains.length === 0 || isResolving || isRetryingAll"
           >
             {{ isRetryingAll ? 'Retrying...' : 'Retry All Resolved' }}
+          </button>
+          <button
+            class="import-btn"
+            @click="importDomains"
+          >
+            Import
+          </button>
+          <button
+            class="export-btn"
+            @click="exportDomains"
+            :disabled="resolvedDomains.length === 0"
+          >
+            Export
           </button>
         </div>
       </div>
@@ -580,7 +811,16 @@ function loadFromStorage() {
               :class="['resolved-item', { 'flash-retry': recentlyRetriedDomains.has(resolved.domain) }]"
             >
               <div class="resolved-info">
-                <strong>{{ resolved.domain }}</strong>
+                <strong>
+                  <a
+                    :href="`http://${resolved.domain}`"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    class="domain-name-link"
+                  >
+                    {{ resolved.domain }}
+                  </a>
+                </strong>
                 <span class="ip">IP: {{ resolved.ip }}</span>
                 <span class="timestamp">Resolved: {{ resolved.resolvedAt }}</span>
               </div>
@@ -615,7 +855,16 @@ function loadFromStorage() {
               :class="['resolved-item', { 'flash-retry': recentlyRetriedDomains.has(resolved.domain) }]"
             >
               <div class="resolved-info">
-                <strong>{{ resolved.domain }}</strong>
+                <strong>
+                  <a
+                    :href="`http://${resolved.domain}`"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    class="domain-name-link"
+                  >
+                    {{ resolved.domain }}
+                  </a>
+                </strong>
                 <span class="ip">IP: {{ resolved.ip }}</span>
                 <span class="timestamp">Resolved: {{ resolved.resolvedAt }}</span>
               </div>
@@ -732,6 +981,35 @@ h1 {
   word-break: break-word;
 }
 
+.domain-links {
+  display: inline;
+  margin-left: 5px;
+}
+
+.domain-link {
+  color: #4fc3f7;
+  text-decoration: none;
+  font-weight: 500;
+  transition: color 0.2s;
+}
+
+.domain-link:hover {
+  color: #81d4fa;
+  text-decoration: underline;
+}
+
+.domain-name-link {
+  color: #42b883;
+  text-decoration: none;
+  font-weight: 500;
+  transition: color 0.2s;
+}
+
+.domain-name-link:hover {
+  color: #35a372;
+  text-decoration: underline;
+}
+
 .controls {
   background: #f5f5f5;
   padding: 20px;
@@ -812,6 +1090,42 @@ button:disabled {
 }
 
 .retry-all-btn:disabled {
+  background: #ccc;
+  border-color: #ccc;
+}
+
+.import-btn {
+  flex: 1;
+  padding: 15px;
+  font-size: 16px;
+  font-weight: bold;
+  background: #00bcd4;
+  border: 2px solid #0097a7;
+}
+
+.import-btn:hover:not(:disabled) {
+  background: #0097a7;
+}
+
+.import-btn:disabled {
+  background: #ccc;
+  border-color: #ccc;
+}
+
+.export-btn {
+  flex: 1;
+  padding: 15px;
+  font-size: 16px;
+  font-weight: bold;
+  background: #9c27b0;
+  border: 2px solid #7b1fa2;
+}
+
+.export-btn:hover:not(:disabled) {
+  background: #7b1fa2;
+}
+
+.export-btn:disabled {
   background: #ccc;
   border-color: #ccc;
 }
@@ -1000,6 +1314,7 @@ button:disabled {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 10px;
   transition: background-color 3s ease-out, border-color 3s ease-out;
 }
 
@@ -1024,30 +1339,41 @@ button:disabled {
   display: flex;
   flex-direction: column;
   gap: 4px;
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
 }
 
 .resolved-info strong {
   color: #333;
+  word-break: break-word;
+  overflow-wrap: break-word;
 }
 
 .ip {
   color: #666;
   font-size: 14px;
+  word-break: break-word;
+  overflow-wrap: break-word;
 }
 
 .timestamp {
   color: #999;
   font-size: 12px;
+  word-break: break-word;
+  overflow-wrap: break-word;
 }
 
 .resolved-actions {
   display: flex;
   gap: 8px;
+  flex-shrink: 0;
 }
 
 .resolved-actions button {
   padding: 6px 12px;
   font-size: 12px;
+  white-space: nowrap;
 }
 
 .remove-btn {
