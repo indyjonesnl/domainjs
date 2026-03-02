@@ -818,6 +818,7 @@ function loadFromStorage() {
               :key="`unmatched-${index}`"
               :class="['resolved-item', { 'flash-retry': recentlyRetriedDomains.has(resolved.domain) }]"
             >
+              <div class="domain-number">{{ index + 1 }}</div>
               <div class="resolved-info">
                 <strong>
                   <a
@@ -862,6 +863,7 @@ function loadFromStorage() {
               :key="`${server.name}-${index}`"
               :class="['resolved-item', { 'flash-retry': recentlyRetriedDomains.has(resolved.domain) }]"
             >
+              <div class="domain-number">{{ index + 1 }}</div>
               <div class="resolved-info">
                 <strong>
                   <a
@@ -1324,6 +1326,21 @@ button:disabled {
   align-items: center;
   gap: 10px;
   transition: background-color 3s ease-out, border-color 3s ease-out;
+}
+
+.domain-number {
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #42b883;
+  color: white;
+  font-weight: bold;
+  font-size: 14px;
+  border-radius: 50%;
+  margin-right: 4px;
 }
 
 .resolved-item.flash-retry {
